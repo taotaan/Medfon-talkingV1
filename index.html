@@ -441,6 +441,8 @@ const elevenTTSEndpoint = [
 ];
 const microsoftTTSEndpoint = "wss://northeurope.tts.speech.microsoft.com/cognitiveservices/websocket/v1";
 const grokChatCompletionsEndpoint = "https://api.x.ai/v1/responses";
+const pathummaChatCompletionsEndpoint = site.pathumma.baseUrl + "/chat/completions";
+const pathummaTTSEndpoint = site.pathumma.baseUrl + "/audio/speech";
 
 
 // I18n internationalization
@@ -871,6 +873,92 @@ async function microsoftProcessQueue() {
   }
 }
 
+function pathummaWordTimings(text, durationMs) {
+  let words = [];
+  try {
+    const segmenter = new Intl.Segmenter('th', { granularity: 'word' });
+    words = [...segmenter.segment(text)]
+      .filter(x => x.isWordLike || x.segment.trim().length)
+      .map(x => x.segment.trim())
+      .filter(Boolean);
+  } catch(error) {
+    words = text.trim().split(/\s+/).filter(Boolean);
+  }
+  if ( !words.length ) words = [text.trim()];
+
+  const weights = words.map(x => Math.max(1, [...x].length));
+  const total = weights.reduce((a,b) => a + b, 0) || 1;
+  let t = 0;
+  return words.reduce((o, word, i) => {
+    const d = Math.max(80, durationMs * weights[i] / total);
+    o.words.push(word);
+    o.wtimes.push(t);
+    o.wdurations.push(d);
+    t += d;
+    return o;
+  }, { words: [], wtimes: [], wdurations: [] });
+}
+
+async function pathummaSpeak(s, node=null) {
+  const apikey = d3.select("#apikey-pathumma").property("value");
+  let url = apikey ? pathummaTTSEndpoint : site.pathumma.ttsProxy;
+  const headers = { "Content-Type": "application/json" };
+  if ( apikey ) {
+    headers["Authorization"] = "Bearer " + apikey;
+  } else {
+    headers["Authorization"] = "Bearer " + await jwtGet();
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    mode: "cors",
+    headers: headers,
+    body: JSON.stringify({
+      model: site.pathumma.ttsModel,
+      voice: cfg('voice-pathumma-id') || "female",
+      input: s,
+      response_format: "mp3"
+    })
+  });
+  if ( !res.ok ) throw new Error(await res.text() || ("" + res.status));
+
+  const audio = await res.arrayBuffer();
+  const copy = audio.slice(0);
+  const audioBuffer = await head.audioCtx.decodeAudioData(copy);
+  const timing = pathummaWordTimings(s, audioBuffer.duration * 1000);
+  head.speakAudio({
+    audio: [ audio ],
+    words: timing.words,
+    wtimes: timing.wtimes,
+    wdurations: timing.wdurations
+  }, { lipsyncLang: cfg('voice-lipsync-lang') || 'th' }, node ? addText.bind(null,node) : null );
+}
+
+async function speakWithProvider(s, node=null, exclude=null) {
+  if ( cfg('voice-type') === 'eleven' ) {
+    await elevenSpeak( s + " ", node );
+    return exclude;
+  }
+  if ( cfg('voice-type') === 'microsoft' ) {
+    await microsoftSpeak( s, node );
+    return exclude;
+  }
+  if ( cfg('voice-type') === 'pathumma' ) {
+    await pathummaSpeak( s, node );
+    return exclude;
+  }
+
+  exclude = excludesProcess(s,exclude);
+  await head.speakText( s, {
+    lipsyncLang: cfg('voice-lipsync-lang'),
+    ttsVoice: cfg('voice-google-id'),
+    ttsLang: cfg('voice-google-id').substring(0,5),
+    ttsRate: cfg('voice-google-rate'),
+    ttsPitch: cfg('voice-google-pitch')
+  }, node ? addText.bind(null,node) : null, exclude.excludes );
+  return exclude;
+}
+
 // Whisper MP3
 let whisperAudio = null;
 let whisperLipsyncLang = 'en';
@@ -1260,20 +1348,20 @@ let CFG = {
       name: "Nimetön",
       theme: { lang: 'en', brightness:"dark", ratio:"wide", layout:"port" },
       view: { image: 'NONE' },
-      avatar: {},
+      avatar: { name: "Medfon" },
       camera: { frame: 'full' },
-      ai: {},
-      voice: { background: "NONE", type: "google", google:{ id: "en-GB-Standard-A"}, lipsync:{ lang: 'en' } }
+      ai: { model: "pathumma" },
+      voice: { background: "NONE", type: "pathumma", google:{ id: "en-GB-Standard-A"}, pathumma: { id: "female" }, lipsync:{ lang: 'th' } }
     },
     {
       name: "Nimetön 2",
 
       theme: { lang: 'en', brightness: "dark", ratio: "wide", layout: "land" },
       view: { image: 'NONE' },
-      avatar: {},
+      avatar: { name: "Medfon" },
       camera: { frame: 'upper' },
-      ai: {},
-      voice: { background: "NONE", type: "google", google:{ id: "en-GB-Standard-A"}, lipsync:{ lang: 'en' } }
+      ai: { model: "pathumma" },
+      voice: { background: "NONE", type: "pathumma", google:{ id: "en-GB-Standard-A"}, pathumma: { id: "female" }, lipsync:{ lang: 'th' } }
     },
   ]
 };
@@ -1659,12 +1747,13 @@ async function openaiSendMessage(node,msgs) {
   // Endpoint/proxy and authentication
   let url;
   let headers = { "Content-Type": "application/json" };
-  const apikey = d3.select("#apikey-openai").property("value");
+  const provider = cfg('ai-model') === 'pathumma' ? 'pathumma' : 'openai';
+  const apikey = d3.select(provider === 'pathumma' ? "#apikey-pathumma" : "#apikey-openai").property("value");
   if ( apikey ) {
-    url = openaiChatCompletionsEndpoint;
+    url = provider === 'pathumma' ? pathummaChatCompletionsEndpoint : openaiChatCompletionsEndpoint;
     headers["Authorization"] = "Bearer " + apikey;
   } else {
-    url = openaiChatCompletionsProxy;
+    url = provider === 'pathumma' ? site.pathumma.chatProxy : openaiChatCompletionsProxy;
     headers["Authorization"] = "Bearer " + await jwtGet()
   }
 
@@ -1672,7 +1761,7 @@ async function openaiSendMessage(node,msgs) {
   try {
     // Message body
     const body = {
-      model: cfg('ai-model'),
+      model: provider === 'pathumma' ? site.pathumma.chatModel : cfg('ai-model'),
       messages: msgs.map( x => {
         const {role,content,name} = x;
         return (name ? {role,content,name} : {role,content});
@@ -1691,7 +1780,7 @@ async function openaiSendMessage(node,msgs) {
     if ( user && user.length ) {
       body.user = user;
     }
-    const isMotionSelected = d3.select("#motion").classed("selected");
+    const isMotionSelected = provider !== 'pathumma' && d3.select("#motion").classed("selected");
     if ( isMotionSelected ) {
       body.tools = [
         {
@@ -1832,20 +1921,7 @@ async function openaiSendMessage(node,msgs) {
             }
 
             if ( tts ) {
-              if ( cfg('voice-type') === 'eleven' ) {
-                await elevenSpeak( tts.trimStart() + " ", node );
-              } else if ( cfg('voice-type') === 'microsoft' ) {
-                await microsoftSpeak( tts.trimStart() + " ", node );
-              } else {
-                exclude = excludesProcess(tts,exclude);
-                await head.speakText( tts, {
-                  lipsyncLang: cfg('voice-lipsync-lang'),
-                  ttsVoice: cfg('voice-google-id'),
-                  ttsLang: cfg('voice-google-id').substring(0,5),
-                  ttsRate: cfg('voice-google-rate'),
-                  ttsPitch: cfg('voice-google-pitch')
-                }, addText.bind(null,node), exclude.excludes );
-              }
+              exclude = await speakWithProvider( tts.trimStart(), node, exclude );
             }
 
             break;
@@ -1862,20 +1938,7 @@ async function openaiSendMessage(node,msgs) {
               let s = tts.substring(0, idx);
               if ( s && s.length ) {
                 tts = tts.substring(idx).trimStart();
-                if ( cfg('voice-type') === 'eleven' ) {
-                  await elevenSpeak( s + " ", node );
-                } else if ( cfg('voice-type') === 'microsoft' ) {
-                  await microsoftSpeak( s + " ", node );
-                } else {
-                  exclude = excludesProcess(s,exclude);
-                  await head.speakText( s, {
-                    lipsyncLang: cfg('voice-lipsync-lang'),
-                    ttsVoice: cfg('voice-google-id'),
-                    ttsLang: cfg('voice-google-id').substring(0,5),
-                    ttsRate: cfg('voice-google-rate'),
-                    ttsPitch: cfg('voice-google-pitch')
-                  }, addText.bind(null,node), exclude.excludes );
-                }
+                exclude = await speakWithProvider( s, node, exclude );
               }
             }
           }
@@ -2009,20 +2072,7 @@ async function grokSendMessage(node,msgs) {
 
 
           if ( tts ) {
-            if ( cfg('voice-type') === 'eleven' ) {
-              await elevenSpeak( tts.trimStart() + " ", node );
-            } else if ( cfg('voice-type') === 'microsoft' ) {
-              await microsoftSpeak( tts.trimStart() + " ", node );
-            } else {
-              exclude = excludesProcess(tts,exclude);
-              await head.speakText( tts, {
-                lipsyncLang: cfg('voice-lipsync-lang'),
-                ttsVoice: cfg('voice-google-id'),
-                ttsLang: cfg('voice-google-id').substring(0,5),
-                ttsRate: cfg('voice-google-rate'),
-                ttsPitch: cfg('voice-google-pitch')
-              }, addText.bind(null,node), exclude.excludes );
-            }
+            exclude = await speakWithProvider( tts.trimStart(), node, exclude );
           }
 
           break;
@@ -2039,20 +2089,7 @@ async function grokSendMessage(node,msgs) {
             let s = tts.substring(0, idx);
             if ( s && s.length ) {
               tts = tts.substring(idx).trimStart();
-              if ( cfg('voice-type') === 'eleven' ) {
-                await elevenSpeak( s + " ", node );
-              } else if ( cfg('voice-type') === 'microsoft' ) {
-                await microsoftSpeak( s + " ", node );
-              } else {
-                exclude = excludesProcess(s,exclude);
-                await head.speakText( s, {
-                  lipsyncLang: cfg('voice-lipsync-lang'),
-                  ttsVoice: cfg('voice-google-id'),
-                  ttsLang: cfg('voice-google-id').substring(0,5),
-                  ttsRate: cfg('voice-google-rate'),
-                  ttsPitch: cfg('voice-google-pitch')
-                }, addText.bind(null,node), exclude.excludes );
-              }
+              exclude = await speakWithProvider( s, node, exclude );
             }
           }
         }
@@ -2171,20 +2208,7 @@ async function llamaSendMessage(node,msgs) {
 
 
           if ( tts ) {
-            if ( cfg('voice-type') === 'eleven' ) {
-              await elevenSpeak( tts.trimStart() + " ", node );
-            } else if ( cfg('voice-type') === 'microsoft' ) {
-              await microsoftSpeak( tts.trimStart() + " ", node );
-            } else {
-              exclude = excludesProcess(tts,exclude);
-              await head.speakText( tts, {
-                lipsyncLang: cfg('voice-lipsync-lang'),
-                ttsVoice: cfg('voice-google-id'),
-                ttsLang: cfg('voice-google-id').substring(0,5),
-                ttsRate: cfg('voice-google-rate'),
-                ttsPitch: cfg('voice-google-pitch')
-              }, addText.bind(null,node), exclude.excludes );
-            }
+            exclude = await speakWithProvider( tts.trimStart(), node, exclude );
           }
 
           break;
@@ -2201,20 +2225,7 @@ async function llamaSendMessage(node,msgs) {
             let s = tts.substring(0, idx);
             if ( s && s.length ) {
               tts = tts.substring(idx).trimStart();
-              if ( cfg('voice-type') === 'eleven' ) {
-                await elevenSpeak( s + " ", node );
-              } else if ( cfg('voice-type') === 'microsoft' ) {
-                await microsoftSpeak( s + " ", node );
-              } else {
-                exclude = excludesProcess(s,exclude);
-                await head.speakText( s, {
-                  lipsyncLang: cfg('voice-lipsync-lang'),
-                  ttsVoice: cfg('voice-google-id'),
-                  ttsLang: cfg('voice-google-id').substring(0,5),
-                  ttsRate: cfg('voice-google-rate'),
-                  ttsPitch: cfg('voice-google-pitch')
-                }, addText.bind(null,node), exclude.excludes );
-              }
+              exclude = await speakWithProvider( s, node, exclude );
             }
           }
         }
@@ -2323,6 +2334,7 @@ async function geminiSendMessage(node,msgs) {
 
   // Elements
   node.dataset.output = '';
+  let exclude = null;
 
   // Chat completion
   try {
@@ -2472,19 +2484,7 @@ async function geminiSendMessage(node,msgs) {
           // Speak and break when done
           if ( done ) {
             if ( tts ) {
-              if ( cfg('voice-type') === 'eleven' ) {
-                await elevenSpeak( tts + " ", node );
-              } else if ( cfg('voice-type') === 'microsoft' ) {
-                await microsoftSpeak( tts + " ", node );
-              } else {
-                await head.speakText( tts, {
-                  lipsyncLang: cfg('voice-lipsync-lang'),
-                  ttsVoice: cfg('voice-google-id'),
-                  ttsLang: cfg('voice-google-id').substring(0,5),
-                  ttsRate: cfg('voice-google-rate'),
-                  ttsPitch: cfg('voice-google-pitch')
-                }, addText.bind(null,node) );
-              }
+              exclude = await speakWithProvider( tts, node, exclude );
             }
             break;
           } else {
@@ -2494,19 +2494,7 @@ async function geminiSendMessage(node,msgs) {
               if ( tmp > ndx ) ndx = tmp + 1;
             });
             if ( ndx > 10 ) {
-              if ( cfg('voice-type') === 'eleven' ) {
-                await elevenSpeak( tts.substring(0, ndx) + " ", node );
-              } else if ( cfg('voice-type') === 'microsoft' ) {
-                await microsoftSpeak( tts.substring(0, ndx) + " ", node );
-              } else {
-                await head.speakText( tts.substring(0, ndx), {
-                  lipsyncLang: cfg('voice-lipsync-lang'),
-                  ttsVoice: cfg('voice-google-id'),
-                  ttsLang: cfg('voice-google-id').substring(0,5),
-                  ttsRate: cfg('voice-google-rate'),
-                  ttsPitch: cfg('voice-google-pitch')
-                }, addText.bind(null,node) );
-              }
+              exclude = await speakWithProvider( tts.substring(0, ndx), node, exclude );
               tts = tts.substring(ndx).trimStart();
             }
           }
@@ -2638,21 +2626,7 @@ function addMessage(user = false) {
         const e = d3.select(this.parentNode.parentNode);
         let text = e.attr("data-output");
         if ( text && text.length ) {
-          if ( cfg('voice-type') === 'eleven' ) {
-            elevenSpeak( text + " " );
-            elevenSpeak( "" );
-          } else if ( cfg('voice-type') === 'microsoft' ) {
-            microsoftSpeak( text );
-            microsoftSpeak( null );
-          } else {
-            head.speakText( text, {
-              lipsyncLang: cfg('voice-lipsync-lang'),
-              ttsVoice: cfg('voice-google-id'),
-              ttsLang: cfg('voice-google-id').substring(0,5),
-              ttsRate: cfg('voice-google-rate'),
-              ttsPitch: cfg('voice-google-pitch')
-            } );
-          }
+          speakWithProvider( text );
         }
       })
       .html(svgSpeak);
@@ -2707,21 +2681,7 @@ function addText(node,s) {
 // External speak
 async function speak(s) {
   let node = addMessage(false);
-  if ( cfg('voice-type') === 'eleven' ) {
-    await elevenSpeak( s, node );
-    await elevenSpeak( "", node );
-  } else if ( cfg('voice-type') === 'microsoft' ) {
-    await microsoftSpeak( s, node );
-    await microsoftSpeak(null);
-  } else {
-    await head.speakText( s, {
-      lipsyncLang: cfg('voice-lipsync-lang'),
-      ttsVoice: cfg('voice-google-id'),
-      ttsLang: cfg('voice-google-id').substring(0,5),
-      ttsRate: cfg('voice-google-rate'),
-      ttsPitch: cfg('voice-google-pitch')
-    }, addText.bind(null,node) );
-  }
+  await speakWithProvider( s, node );
 
   // When this marker has been reached, stop blinking
   head.speakMarker( () => {
@@ -3574,13 +3534,7 @@ async function scriptRun() {
           microsoftSpeak( x, node, resolve );
         });
       } else {
-        await head.speakText( x, {
-          lipsyncLang: cfg('voice-lipsync-lang'),
-          ttsVoice: cfg('voice-google-id'),
-          ttsLang: cfg('voice-google-id').substring(0,5),
-          ttsRate: cfg('voice-google-rate'),
-          ttsPitch: cfg('voice-google-pitch')
-        }, addText.bind(null,node) );
+        await speakWithProvider( x, node );
       }
 
       // Wait for it
@@ -3677,6 +3631,19 @@ document.addEventListener('DOMContentLoaded', async function(e) {
       .attr("data-i18n-site","microsoftVoices-"+k);
   }
 
+  // Add Pathumma voices
+  const ePathummaVoices = d3.select("#pathummavoices");
+  for ( const [i,k] of Object.entries(Object.keys(site.pathumma.voices)) ) {
+    let o = site.pathumma.voices[k];
+    ePathummaVoices.append("div")
+      .classed("command", true)
+      .classed("selected", parseInt(i) === 0 )
+      .attr("data-item","voice-pathumma-id")
+      .attr("data-type","option")
+      .attr("data-voice-pathumma-id",o.id)
+      .text(k);
+  }
+
   // Add views
   const eViews = d3.select("#views");
   for ( const [k,o] of Object.entries(site.views) ) {
@@ -3752,7 +3719,7 @@ document.addEventListener('DOMContentLoaded', async function(e) {
     cameraPanEnable: true,
     cameraView: 'full',
     avatarMood: 'neutral',
-    lipsyncModules: ["en", "fi", "lt", "fr", "de"],
+    lipsyncModules: ["en", "fi", "lt", "fr", "de", "th"],
     // Stats display that can be used when testing performance
     statsNode: document.body,
     statsStyle: "position: fixed; bottom: 0px; left: 0px; cursor: pointer; opacity: 0.9; z-index: 10000;"
@@ -3793,9 +3760,9 @@ document.addEventListener('DOMContentLoaded', async function(e) {
       let text = e.property("value");
       if ( head && text.length ) {
 
-        if ( cfg('ai-model').startsWith("gpt") ) {
+        if ( cfg('ai-model').startsWith("gpt") || cfg('ai-model') === "pathumma" ) {
           const m = openaiBuildMessage();
-          let flag = await openaiModerateMessage(m);
+          let flag = cfg('ai-model') === "pathumma" ? false : await openaiModerateMessage(m);
 
           const nodeInput = addMessage(true);
           nodeInput.dataset.input = text;
@@ -3862,22 +3829,7 @@ document.addEventListener('DOMContentLoaded', async function(e) {
     const e = d3.select("[data-voice-test]");
     let text = e.property("value");
     if ( head && text.length ) {
-      if ( cfg('voice-type') === 'eleven' ) {
-        elevenSpeak( text + " " );
-        elevenSpeak( "" );
-      } else if ( cfg('voice-type') === 'microsoft' ) {
-        microsoftSpeak( text );
-        microsoftSpeak( null );
-      } else {
-        const exclude = excludesProcess(text);
-        head.speakText( text, {
-          lipsyncLang: cfg('voice-lipsync-lang'),
-          ttsVoice: cfg('voice-google-id'),
-          ttsLang: cfg('voice-google-id').substring(0,5),
-          ttsRate: cfg('voice-google-rate'),
-          ttsPitch: cfg('voice-google-pitch')
-        }, null, exclude.excludes );
-      }
+      speakWithProvider( text );
     }
   });
 
@@ -4409,6 +4361,7 @@ document.addEventListener('DOMContentLoaded', async function(e) {
     d3.select("#voice-google").style("display", (e.attr("data-voice-type") === 'google') ? "flex" : "none" );
     d3.select("#voice-eleven").style("display", (e.attr("data-voice-type") === 'eleven') ? "flex" : "none" );
     d3.select("#voice-microsoft").style("display", (e.attr("data-voice-type") === 'microsoft') ? "flex" : "none" );
+    d3.select("#voice-pathumma").style("display", (e.attr("data-voice-type") === 'pathumma') ? "flex" : "none" );
     d3.select("#lipsync").style("display", (e.attr("data-voice-type") !== 'microsoft') ? "flex" : "none" );
     d3.select("#excludes").style("display", (e.attr("data-voice-type") === 'google') ? "flex" : "none" );
   });
@@ -4428,6 +4381,12 @@ document.addEventListener('DOMContentLoaded', async function(e) {
   d3.selectAll("[data-voice-microsoft-id]").on('click.command', function(ev) {
     const e = d3.select(this);
     d3.selectAll("[data-voice-microsoft-id]").classed('selected',false);
+    e.classed('selected',true);
+  });
+
+  d3.selectAll("[data-voice-pathumma-id]").on('click.command', function(ev) {
+    const e = d3.select(this);
+    d3.selectAll("[data-voice-pathumma-id]").classed('selected',false);
     e.classed('selected',true);
   });
 
@@ -4508,7 +4467,7 @@ document.addEventListener('DOMContentLoaded', async function(e) {
     const e = d3.select(this);
     d3.selectAll("[data-ai-model]").classed('selected',false);
     e.classed('selected',true);
-    d3.select("#ai-openai").style("display", (e.attr("data-ai-model").startsWith('gpt') ) ? "flex" : "none" );
+    d3.select("#ai-openai").style("display", (e.attr("data-ai-model").startsWith('gpt') || e.attr("data-ai-model") === 'pathumma' ) ? "flex" : "none" );
     d3.select("#ai-gemini").style("display", (e.attr("data-ai-model").startsWith('gemini') ) ? "flex" : "none" );
     d3.select("#ai-grok").style("display", (e.attr("data-ai-model").startsWith('grok') ) ? "flex" : "none" );
     d3.select("#ai-llama").style("display", (e.attr("data-ai-model").startsWith('llama') ) ? "flex" : "none" );
@@ -4795,7 +4754,8 @@ document.addEventListener('DOMContentLoaded', async function(e) {
             <div class="text label" data-i18n-text="AI"></div>
             <div class="column">
               <div class="rowWrap">
-                <div class="command selected" data-item="ai-model" data-type="option" data-ai-model="gpt-4.1-mini">GPT-4.1-mini</div>
+                <div class="command selected" data-item="ai-model" data-type="option" data-ai-model="pathumma">Pathumma</div>
+                <div class="command" data-item="ai-model" data-type="option" data-ai-model="gpt-4.1-mini">GPT-4.1-mini</div>
                 <div class="command" data-item="ai-model" data-type="option" data-ai-model="gpt-4.1">GPT-4.1</div>
                 <div class="command" data-item="ai-model" data-type="option" data-ai-model="grok-4.3">Grok-4.3</div>
                 <div class="command" data-item="ai-model" data-type="option" data-ai-model="gemini-2.5-flash">Gemini-2.5-flash</div>
@@ -6026,7 +5986,8 @@ document.addEventListener('DOMContentLoaded', async function(e) {
             <div class="text label" data-i18n-text="Speech"></div>
             <div class="column">
               <div class="rowWrap">
-                <div class="command selected" data-item="voice-type" data-type="option" data-voice-type="google">Google</div>
+                <div class="command selected" data-item="voice-type" data-type="option" data-voice-type="pathumma">Pathumma</div>
+                <div class="command" data-item="voice-type" data-type="option" data-voice-type="google">Google</div>
                 <div class="command" data-item="voice-type" data-type="option" data-voice-type="microsoft">Microsoft</div>
                 <div class="command" data-item="voice-type" data-type="option" data-voice-type="eleven">ElevenLabs</div>
               </div>
@@ -6075,15 +6036,23 @@ document.addEventListener('DOMContentLoaded', async function(e) {
               </div>
             </div>
           </div>
+          <div id="voice-pathumma" class="row">
+            <div class="text label"></div>
+            <div class="column">
+              <div id="pathummavoices" class="rowWrap">
+              </div>
+            </div>
+          </div>
           <div id="lipsync" class="row">
             <div class="text label" data-i18n-text="Lip-sync"></div>
             <div class="column">
               <div class="rowWrap">
                 <div class="command" data-i18n-text="de" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="de"></div>
-                <div class="command selected" data-i18n-text="en" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="en"></div>
+                <div class="command" data-i18n-text="en" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="en"></div>
                 <div class="command" data-i18n-text="fi" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="fi"></div>
                 <div class="command" data-i18n-text="fr" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="fr"></div>
                 <div class="command" data-i18n-text="lt" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="lt"></div>
+                <div class="command selected" data-i18n-text="th" data-item="voice-lipsync-lang" data-type="option" data-voice-lipsync-lang="th"></div>
               </div>
             </div>
           </div>
@@ -6289,6 +6258,11 @@ document.addEventListener('DOMContentLoaded', async function(e) {
           <div class="row">
             <div class="text label" style="width: 8rem">OpenAI</div>
             <input id="apikey-openai" class="apikey" type="text" placeholder="API key not specified; using proxy/JWT">
+          </div>
+
+          <div class="row">
+            <div class="text label" style="width: 8rem">Pathumma</div>
+            <input id="apikey-pathumma" class="apikey" type="text" placeholder="API key not specified; using proxy/JWT">
           </div>
 
           <div class="row">

@@ -3,6 +3,18 @@ export const site = {
 
   // Preset avatars
   avatars: {
+    'Medfon': {
+      url: './avatars/medfon.glb',
+      body: 'F',
+      avatarMood: 'neutral',
+      lipsyncLang: 'th',
+      baseline: {
+        headRotateX: -0.04,
+        eyeBlinkLeft: 0.08,
+        eyeBlinkRight: 0.08
+      }
+    },
+
     'Brunette': {
       url: './avatars/brunette.glb',
       body: 'F',
@@ -201,6 +213,19 @@ export const site = {
     "fr-Lucien": { lang: "fr-FR", id: "fr-FR-LucienMultilingualNeural" },
     "de-Seraphina": { lang: "de-DE", id: "de-DE-SeraphinaMultilingualNeural" },
     "de-Florian": { lang: "de-DE", id: "de-DE-FlorianMultilingualNeural" },
+  },
+
+  // Pathumma / TokenMind provider
+  pathumma: {
+    baseUrl: "https://tokenmind.pathumma.in.th/v1",
+    chatProxy: "/pathumma/v1/chat/completions",
+    ttsProxy: "/pathumma/v1/audio/speech",
+    chatModel: "ptm-minimax-m3",
+    ttsModel: "ptm-tts-1",
+    voices: {
+      "Thai-F": { id: "ped", lang: "th-TH" },
+      "Thai-M": { id: "ped", lang: "th-TH" }
+    }
   },
 
   // Preset views
