@@ -13,6 +13,8 @@
     "three": "^0.180.0"
   },
   "scripts": {
+    "check:pathumma-tts": "node scripts/check-pathumma-tts.mjs",
+    "check:pathumma-voices": "node scripts/check-pathumma-voices.mjs",
     "start": "node server.mjs",
     "test": "echo \"No tests configured\" && exit 1"
   },

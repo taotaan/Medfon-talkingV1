@@ -875,8 +875,9 @@ async function microsoftProcessQueue() {
 
 function pathummaWordTimings(text, durationMs) {
   let words = [];
+  const lang = cfg('voice-lipsync-lang') || 'th';
   try {
-    const segmenter = new Intl.Segmenter('th', { granularity: 'word' });
+    const segmenter = new Intl.Segmenter(lang, { granularity: 'word' });
     words = [...segmenter.segment(text)]
       .filter(x => x.isWordLike || x.segment.trim().length)
       .map(x => x.segment.trim())
@@ -890,7 +891,7 @@ function pathummaWordTimings(text, durationMs) {
   const total = weights.reduce((a,b) => a + b, 0) || 1;
   let t = 0;
   return words.reduce((o, word, i) => {
-    const d = Math.max(80, durationMs * weights[i] / total);
+    const d = durationMs * weights[i] / total;
     o.words.push(word);
     o.wtimes.push(t);
     o.wdurations.push(d);
@@ -1346,22 +1347,22 @@ let CFG = {
   sessions : [
     {
       name: "Nimetön",
-      theme: { lang: 'en', brightness:"dark", ratio:"wide", layout:"port" },
+      theme: { lang: 'th', brightness:"dark", ratio:"wide", layout:"port" },
       view: { image: 'NONE' },
       avatar: { name: "Medfon" },
       camera: { frame: 'full' },
       ai: { model: "pathumma" },
-      voice: { background: "NONE", type: "pathumma", google:{ id: "en-GB-Standard-A"}, pathumma: { id: "female" }, lipsync:{ lang: 'th' } }
+      voice: { background: "NONE", type: "pathumma", google:{ id: "en-GB-Standard-A"}, pathumma: { id: "ped" }, lipsync:{ lang: 'th' } }
     },
     {
       name: "Nimetön 2",
 
-      theme: { lang: 'en', brightness: "dark", ratio: "wide", layout: "land" },
+      theme: { lang: 'th', brightness: "dark", ratio: "wide", layout: "land" },
       view: { image: 'NONE' },
       avatar: { name: "Medfon" },
       camera: { frame: 'upper' },
       ai: { model: "pathumma" },
-      voice: { background: "NONE", type: "pathumma", google:{ id: "en-GB-Standard-A"}, pathumma: { id: "female" }, lipsync:{ lang: 'th' } }
+      voice: { background: "NONE", type: "pathumma", google:{ id: "en-GB-Standard-A"}, pathumma: { id: "ped" }, lipsync:{ lang: 'th' } }
     },
   ]
 };
