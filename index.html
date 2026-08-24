@@ -924,8 +924,7 @@ async function pathummaSpeak(s, node=null) {
   if ( !res.ok ) throw new Error(await res.text() || ("" + res.status));
 
   const audio = await res.arrayBuffer();
-  const copy = audio.slice(0);
-  const audioBuffer = await head.audioCtx.decodeAudioData(copy);
+  const audioBuffer = await head.audioCtx.decodeAudioData(audio.slice(0));
   const timing = pathummaWordTimings(s, audioBuffer.duration * 1000);
   head.speakAudio({
     audio: [ audio ],
@@ -1874,8 +1873,12 @@ async function openaiSendMessage(node,msgs) {
                   fn.id += obj?.choices?.[0]?.delta?.tool_calls?.[0]?.id || '';
                   fn.name += obj?.choices?.[0]?.delta?.tool_calls?.[0]?.function?.name || '';
                   fn.arguments += obj?.choices?.[0]?.delta?.tool_calls?.[0]?.function?.arguments || '';
-                  node.dataset.output += obj?.choices?.[0]?.delta?.content || '';
-                  tts += obj?.choices?.[0]?.delta?.content || '';
+                  const delta = obj?.choices?.[0]?.delta?.content || '';
+                  if ( delta ) {
+                    node.dataset.output += delta;
+                    addText(node, delta);
+                    tts += delta;
+                  }
 
                 }
               }
