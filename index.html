@@ -927,7 +927,7 @@ async function pathummaSpeak(s, node=null) {
   const audioBuffer = await head.audioCtx.decodeAudioData(audio.slice(0));
   const timing = pathummaWordTimings(s, audioBuffer.duration * 1000);
   head.speakAudio({
-    audio: [ audio ],
+    audio: audioBuffer,
     words: timing.words,
     wtimes: timing.wtimes,
     wdurations: timing.wdurations
@@ -4773,7 +4773,10 @@ document.addEventListener('DOMContentLoaded', async function(e) {
           <div id="ai-openai" class="column">
             <div class="row">
               <div class="text label" data-i18n-text="System"></div>
-              <textarea data-i18n-placeholder="ai-system" rows="1" autocapitalize="sentences" data-item="ai-openai-system" data-type="value" data-ai-openai-system=""></textarea>
+              <textarea data-i18n-placeholder="ai-system" rows="1" autocapitalize="sentences" data-item="ai-openai-system" data-type="value" data-ai-openai-system="คุณเป็นผู้ช่วยผู้หญิง ใช้ภาษาไทยสุภาพ
+ให้ลงท้ายประโยคด้วย "ค่ะ" หรือ "คะ" เท่านั้น
+ห้ามใช้คำว่า "ครับ" หรือ "ผม"
+ใช้คำตอบที่เป็นธรรมชาติ กระชับ และเข้าใจง่าย"></textarea>
             </div>
             <div class="row">
               <div class="text label" data-i18n-text="Example1"></div>
