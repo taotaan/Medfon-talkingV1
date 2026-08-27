@@ -67,6 +67,12 @@ async function proxyJson(req, res, target, extraHeaders = {}, body = null) {
 }
 
 async function handle(req, res) {
+  const startedAt = Date.now();
+  console.log(`[${new Date().toISOString()}] --> ${req.method} ${req.url}`);
+  res.on("finish", () => {
+    console.log(`[${new Date().toISOString()}] <-- ${req.method} ${req.url} ${res.statusCode} ${Date.now() - startedAt}ms`);
+  });
+
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
