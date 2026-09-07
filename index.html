@@ -944,7 +944,11 @@ async function speakWithProvider(s, node=null, exclude=null) {
     return exclude;
   }
   if ( cfg('voice-type') === 'pathumma' ) {
-    await pathummaSpeak( s, node );
+    try {
+      await pathummaSpeak( s, node );
+    } catch(ttsErr) {
+      console.warn("Pathumma TTS failed, skipping speech:", ttsErr.message || ttsErr);
+    }
     return exclude;
   }
 
@@ -1428,6 +1432,9 @@ try {
       session.ai.gemini = session.ai.gemini || {};
       session.ai.gemini.system = site.persona.systemPrompt;
     }
+    if ( session.ai?.openai?.output !== undefined && session.ai.openai.output < 4000 ) {
+      session.ai.openai.output = 4000;
+    }
   });
 } catch(error) {
   alert("Invalid JSON settings");
@@ -1805,7 +1812,7 @@ async function openaiSendMessage(node,msgs) {
         const {role,content,name} = x;
         const finalContent = role === 'system'
           ? (provider === 'pathumma'
-            ? site.persona.systemPrompt + "\n\nกฎบังคับ: คุณชื่อปลายลี่เท่านั้น เมื่อผู้ใช้ถามชื่อ ให้ตอบว่า “ฉันชื่อปลายลี่” ห้ามตอบว่า MiniMax-M3 หรือชื่อโมเดลใด ๆ และห้ามใช้คำว่า ผม หรือ ครับ"
+            ? site.persona.systemPrompt + "\n\nกฎบังคับ: คุณชื่อปลายลี่เท่านั้น เมื่อผู้ใช้ถามชื่อ ให้ตอบว่า “ฉันชื่อปลายลี่” ห้ามตอบว่า MiniMax-M3 หรือชื่อโมเดลใด ๆ และห้ามใช้คำว่า ผม หรือ ครับ ให้ตอบคำถามเป็นภาษาไทยเท่านั้น ห้ามตอบเป็นภาษาอังกฤษ"
             : site.persona.systemPrompt + "\n\n" + content)
           : content;
         return (name ? {role,content: finalContent,name} : {role,content: finalContent});
@@ -1813,8 +1820,10 @@ async function openaiSendMessage(node,msgs) {
       temperature: cfg('ai-openai-temperature'),
       presence_penalty: cfg('ai-openai-presence'),
       frequency_penalty: cfg('ai-openai-frequency'),
-      max_tokens: cfg('ai-openai-output'),
-      stream: true
+      max_tokens: provider === 'pathumma'
+        ? Math.max(16384, Number(cfg('ai-openai-output')) || 0)
+        : cfg('ai-openai-output'),
+      stream: provider !== 'pathumma'
     };
     const stop = cfg('ai-openai-stop');
     if ( stop && stop.length ) {
@@ -1883,29 +1892,107 @@ async function openaiSendMessage(node,msgs) {
 
       if ( res.ok ) {
 
+        // --- Pathumma non-streaming path ---
+        if ( provider === 'pathumma' ) {
+          let jsonResponse = await res.json();
+          console.debug("Pathumma non-streaming response:", jsonResponse);
+
+          if ( jsonResponse?.error ) {
+            throw new Error(jsonResponse.error.message || '' + res.status);
+          }
+
+          let choice = jsonResponse?.choices?.[0];
+          let content = choice?.message?.content || '';
+
+          // If model hit token limit during reasoning and content is empty, retry with higher limit
+          if ( (!content || !content.trim()) && choice?.finish_reason === 'length' ) {
+            console.warn("Pathumma: reasoning used all tokens (finish_reason=length), retrying with higher max_tokens...");
+            body.max_tokens = 32768;
+            const retryRes = await fetch( url, {
+              method: "POST",
+              mode: "cors",
+              headers: headers,
+              body: JSON.stringify(body),
+              signal
+            });
+            if ( retryRes.ok ) {
+              jsonResponse = await retryRes.json();
+              console.debug("Pathumma retry response:", jsonResponse);
+              if ( jsonResponse?.error ) {
+                throw new Error(jsonResponse.error.message || '' + retryRes.status);
+              }
+              choice = jsonResponse?.choices?.[0];
+              content = choice?.message?.content || '';
+            } else {
+              const errorText = await retryRes.text();
+              console.error("Pathumma retry failed:", errorText);
+            }
+          }
+
+          const reasoning = choice?.message?.reasoning_content
+            || choice?.message?.provider_specific_fields?.reasoning_content
+            || '';
+
+          if ( reasoning ) {
+            console.debug("Pathumma internal reasoning:", reasoning);
+          }
+
+          if ( content && content.trim() ) {
+            node.dataset.output = content;
+            addText(node, content);
+            tts = content.trimStart();
+            await speakWithProvider( tts, null, null );
+          } else {
+            console.error("Pathumma returned no assistant content", {
+              finish_reason: choice?.finish_reason,
+              usage: jsonResponse?.usage,
+              reasoning: reasoning
+            });
+            throw new Error("Pathumma API ส่งข้อความว่างกลับมา (reasoning ใช้ token หมด)");
+          }
+
+        // --- OpenAI streaming path ---
+        } else {
+
         // Read the response as a stream of data
         const reader = res.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let exclude = null; // Exclude object
         let buffer = ''; // Buffer for incomplete data
+        let reasoningBuffer = ''; // Buffer for reasoning tokens
         const getResponseText = obj => {
           const choice = obj?.choices?.[0];
-          const value = choice?.delta?.content
-            ?? choice?.message?.content
-            ?? choice?.text
+          let value = (choice?.delta && ('content' in choice.delta) && choice.delta.content !== null)
+            ? choice.delta.content
+            : (choice?.message?.content ?? choice?.text ?? choice?.content ?? obj?.output_text ?? obj?.response ?? obj?.content ?? '');
+          if ( typeof value === 'string' ) return value;
+          if ( Array.isArray(value) ) {
+            return value.map(part => typeof part === 'string' ? part : part?.text || part?.content || '').join('');
+          }
+          return value?.text || value?.content || '';
+        };
+        const getReasoningText = obj => {
+          const choice = obj?.choices?.[0];
+          const value = choice?.delta?.reasoning_content
+            ?? choice?.delta?.reasoning
+            ?? choice?.message?.reasoning_content
+            ?? choice?.message?.reasoning
+            ?? obj?.reasoning_content
+            ?? obj?.reasoning
             ?? '';
           if ( typeof value === 'string' ) return value;
           if ( Array.isArray(value) ) {
-            return value.map(part => typeof part === 'string' ? part : part?.text || '').join('');
+            return value.map(part => typeof part === 'string' ? part : part?.text || part?.reasoning_content || '').join('');
           }
           return value?.text || '';
         };
         const processStreamLine = data => {
           const trimmed = data.trim();
           if ( !trimmed ) return false;
-          const line = trimmed.startsWith("data: ") ? trimmed.substring(6).trim() : trimmed;
+          const isSseData = trimmed.startsWith("data:");
+          const line = isSseData ? trimmed.substring(5).trim() : trimmed;
           if ( line === '[DONE]' ) return true;
-          if ( !trimmed.startsWith("data: ") && !trimmed.startsWith("{") ) return false;
+          if ( !isSseData && !trimmed.startsWith("{") ) return false;
 
           let obj;
           try {
@@ -1915,14 +2002,23 @@ async function openaiSendMessage(node,msgs) {
           }
 
           if ( obj && obj.error ) throw new Error(obj.error.message || '' + res.status);
-          fn.id += obj?.choices?.[0]?.delta?.tool_calls?.[0]?.id || '';
-          fn.name += obj?.choices?.[0]?.delta?.tool_calls?.[0]?.function?.name || '';
-          fn.arguments += obj?.choices?.[0]?.delta?.tool_calls?.[0]?.function?.arguments || '';
+          if ( !obj?.choices?.[0] ) {
+            console.debug("Response event without choices", Object.keys(obj || {}));
+          }
+          const choice = obj?.choices?.[0];
+          fn.id += choice?.delta?.tool_calls?.[0]?.id || '';
+          fn.name += choice?.delta?.tool_calls?.[0]?.function?.name || '';
+          fn.arguments += choice?.delta?.tool_calls?.[0]?.function?.arguments || '';
           const delta = getResponseText(obj);
           if ( delta ) {
             node.dataset.output += delta;
             addText(node, delta);
             tts += delta;
+          }
+          // Collect reasoning tokens separately (not displayed to user)
+          const reasoning = getReasoningText(obj);
+          if ( reasoning ) {
+            reasoningBuffer += reasoning;
           }
           return false;
         };
@@ -1985,6 +2081,10 @@ async function openaiSendMessage(node,msgs) {
               body.tool_choice = "none";
             }
 
+            if ( reasoningBuffer ) {
+              console.debug("Internal reasoning:", reasoningBuffer);
+            }
+
             if ( tts ) {
               exclude = await speakWithProvider( tts.trimStart(), null, exclude );
             }
@@ -2011,8 +2111,14 @@ async function openaiSendMessage(node,msgs) {
         }
 
         if ( !node.dataset.output ) {
-          throw new Error("Pathumma API ส่งข้อความว่างกลับมา");
+          console.error("API returned no assistant content", {
+            contentType: res.headers.get("content-type"),
+            model: body.model
+          });
+          throw new Error("API ส่งข้อความว่างกลับมา");
         }
+
+        } // end else (OpenAI streaming path)
 
         // Moderate
         if ( provider !== 'pathumma' ) {
@@ -4960,7 +5066,7 @@ document.addEventListener('DOMContentLoaded', async function(e) {
                       <path fill-rule="evenodd" clip-rule="evenodd" d="M7 1C5.34315 1 4 2.34315 4 4V20C4 21.6569 5.34315 23 7 23H17C18.6569 23 20 21.6569 20 20V4C20 2.34315 18.6569 1 17 1H7ZM17 3H7C6.44772 3 6 3.44772 6 4V20C6 20.5523 6.44772 21 7 21H17C17.5523 21 18 20.5523 18 20V4C18 3.44772 17.5523 3 17 3Z" fill="currentColor" />
                     </svg>
                   </div>
-                  <input type="range" min="100" max="4000" step="100" value="1000" data-range="word" data-item="ai-openai-output" data-type="value" data-ai-openai-output="">
+                  <input type="range" min="100" max="4000" step="100" value="4000" data-range="word" data-item="ai-openai-output" data-type="value" data-ai-openai-output="">
                   <div class="text">2000 sanaa</div>
                 </div>
               </div>
