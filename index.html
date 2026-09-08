@@ -1778,97 +1778,104 @@
           if (!navigator.mediaDevices) throw new Error("No navigator.mediaDevices available for recording.");
           let stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
           recordingMediaRecorder = new MediaRecorder(stream, { mimeType: recordingMediaType.type });
-          recordingMediaRecorder.ondataavailable = async (event) => {
+          recordingChunks = [];
 
-            // If marked ignore, do not transcribe
+          recordingMediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              recordingChunks.push(event.data);
+            }
+          };
+
+          recordingMediaRecorder.onstop = async () => {
             if (recordingIgnoreData) {
               recordingIgnoreData = false;
+              recordingChunks = [];
               return;
-            } else {
-              console.log('Recorded data:', event);
-              recordingIgnoreData = false;
             }
 
-            if (event.data.size > 0) {
+            if (recordingChunks.length > 0) {
+              const fullBlob = new Blob(recordingChunks, { type: recordingMediaType.type });
+              recordingChunks = [];
 
-              // Make a transcription
-              const file = new File([event.data], 'file.' + recordingMediaType.ext, { type: recordingMediaType.type });
-              const form = new FormData();
-              form.append("file", file);
+              if (fullBlob.size > 500) {
+                const file = new File([fullBlob], 'file.' + recordingMediaType.ext, { type: recordingMediaType.type });
+                const form = new FormData();
+                form.append("file", file);
 
-              if (cfg("whisper-type") === "openai") {
+                if (cfg("whisper-type") === "openai") {
 
-                form.append("model", "whisper-1");
-                const lang = cfg('theme-lang') || 'en';
-                form.append("language", lang);
-                const response = await fetch(openaiAudioTranscriptionsProxy, {
-                  method: "POST",
-                  body: form,
-                  headers: {
-                    "Authorization": "Bearer " + await jwtGet()
-                  }
-                });
+                  form.append("model", "whisper-1");
+                  const lang = cfg('theme-lang') || 'en';
+                  form.append("language", lang);
+                  const response = await fetch(openaiAudioTranscriptionsProxy, {
+                    method: "POST",
+                    body: form,
+                    headers: {
+                      "Authorization": "Bearer " + await jwtGet()
+                    }
+                  });
 
-                // Append text to input
-                if (response.ok) {
-                  let json;
-                  try {
-                    json = await response.json();
-                  } catch (error) {
-                    console.error("Invalid response from OpenAI");
-                  }
-                  if (json && json.text) {
-                    const e = d3.select("#input");
-                    let text = e.property("value");
-                    if (text) {
-                      e.property("value", text + ' ' + json.text);
-                    } else {
-                      e.property("value", json.text);
+                  // Append text to input
+                  if (response.ok) {
+                    let json;
+                    try {
+                      json = await response.json();
+                    } catch (error) {
+                      console.error("Invalid response from OpenAI");
+                    }
+                    if (json && json.text) {
+                      const e = d3.select("#input");
+                      let text = e.property("value");
+                      if (text) {
+                        e.property("value", text + ' ' + json.text);
+                      } else {
+                        e.property("value", json.text);
+                      }
                     }
                   }
-                }
-              } else if (cfg("whisper-type") === "local") {
+                } else if (cfg("whisper-type") === "local") {
 
-                form.append("temperature", "0.0");
-                form.append("temperature_inc", "0.2");
-                form.append("response_format", "json");
+                  form.append("temperature", "0.0");
+                  form.append("temperature_inc", "0.2");
+                  form.append("response_format", "json");
 
-                const response = await fetch(localWhisperCppProxy + 'inference', {
-                  method: "POST",
-                  body: form,
-                  headers: {
-                    "Authorization": "Bearer " + await jwtGet()
-                  }
-                });
+                  const response = await fetch(localWhisperCppProxy + 'inference', {
+                    method: "POST",
+                    body: form,
+                    headers: {
+                      "Authorization": "Bearer " + await jwtGet()
+                    }
+                  });
 
-                // Append text to input
-                if (response.ok) {
-                  let json;
-                  try {
-                    json = await response.json();
-                  } catch (error) {
-                    console.error("Invalid response from local Whisper");
-                  }
-                  if (json && json.text) {
-                    const e = d3.select("#input");
-                    let text = e.property("value");
+                  // Append text to input
+                  if (response.ok) {
+                    let json;
+                    try {
+                      json = await response.json();
+                    } catch (error) {
+                      console.error("Invalid response from local Whisper");
+                    }
+                    if (json && json.text) {
+                      const e = d3.select("#input");
+                      let text = e.property("value");
 
-                    let s = json.text
-                      .replace(/\[[^\]]+\]/g, '')
-                      .replaceAll(/[^\p{L}\p{N},\.\p{Quotation_Mark}!€\$\+\p{Dash_Punctuation}%&\?\(\)\* ]/ug, "")
-                      .replaceAll("  ", " ")
-                      .trim();
+                      let s = json.text
+                        .replace(/\[[^\]]+\]/g, '')
+                        .replaceAll(/[^\p{L}\p{N},\.\p{Quotation_Mark}!€\$\+\p{Dash_Punctuation}%&\?\(\)\* ]/ug, "")
+                        .replaceAll("  ", " ")
+                        .trim();
 
-                    if (text) {
-                      e.property("value", text + ' ' + s);
-                    } else {
-                      e.property("value", s);
+                      if (text) {
+                        e.property("value", text + ' ' + s);
+                      } else {
+                        e.property("value", s);
+                      }
                     }
                   }
+
                 }
 
               }
-
             }
           };
 
@@ -5452,7 +5459,7 @@
         } else {
           if (recordingMediaRecorder) {
             if (recordingMediaRecorder.state === 'recording') {
-              recordingIgnoreData = true;
+              recordingIgnoreData = false;
               recordingMediaRecorder.stop();
             }
             recordingMediaRecorder.stream.getTracks().forEach(track => track.stop());
