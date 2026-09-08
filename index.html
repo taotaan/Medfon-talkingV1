@@ -664,6 +664,98 @@
     }
 
 
+    /* Webcam preview PIP overlay */
+    #webcam-container {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      width: 180px;
+      height: 135px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1.5px solid var(--colorBorderPassive, rgba(136, 204, 255, 0.6));
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 12px rgba(136, 204, 255, 0.2);
+      overflow: hidden;
+      z-index: 9999;
+      display: none;
+      opacity: 0;
+      transform: scale(0.9);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      cursor: grab;
+      user-select: none;
+    }
+
+    #webcam-container.active {
+      display: block;
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    #webcam-container:active {
+      cursor: grabbing;
+    }
+
+    #webcam-container #webcam {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      display: block;
+      border-radius: 10px;
+    }
+
+    .webcam-header {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      right: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .webcam-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(0, 0, 0, 0.65);
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #ffffff;
+      letter-spacing: 0.5px;
+      backdrop-filter: blur(4px);
+    }
+
+    .webcam-badge .dot {
+      width: 6px;
+      height: 6px;
+      background-color: #10b981;
+      border-radius: 50%;
+      box-shadow: 0 0 6px #10b981;
+      animation: pulse-webcam-dot 1.5s infinite;
+    }
+
+    @keyframes pulse-webcam-dot {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(0.8); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+
+    .webcam-title {
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.8);
+      background: rgba(0, 0, 0, 0.55);
+      padding: 2px 6px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+    }
+
     /* Fonts */
     @font-face {
       font-family: "SansRegular";
@@ -4405,14 +4497,65 @@
       window.head = head;
 
       // Face Tracking webcam setup
+      let webcamContainer = document.getElementById('webcam-container');
       let webcamVideo = document.getElementById('webcam');
-      if (!webcamVideo) {
-        webcamVideo = document.createElement('video');
-        webcamVideo.id = 'webcam';
-        webcamVideo.style.display = 'none';
-        webcamVideo.autoplay = true;
-        webcamVideo.playsInline = true;
-        document.body.appendChild(webcamVideo);
+      if (!webcamContainer) {
+        webcamContainer = document.createElement('div');
+        webcamContainer.id = 'webcam-container';
+        webcamContainer.className = 'webcam-preview-container';
+        webcamContainer.innerHTML = `
+          <div class="webcam-header">
+            <span class="webcam-badge"><span class="dot"></span> LIVE</span>
+            <span class="webcam-title">Face Tracking</span>
+          </div>
+          <video id="webcam" autoplay playsinline muted></video>
+        `;
+        document.body.appendChild(webcamContainer);
+        webcamVideo = webcamContainer.querySelector('#webcam');
+      }
+
+      // Drag functionality for webcam preview overlay
+      let isDragging = false;
+      let currentX = 0, currentY = 0, initialX = 0, initialY = 0;
+      let xOffset = 0, yOffset = 0;
+
+      webcamContainer.addEventListener('mousedown', dragStart);
+      document.addEventListener('mousemove', drag);
+      document.addEventListener('mouseup', dragEnd);
+
+      webcamContainer.addEventListener('touchstart', dragStart, { passive: true });
+      document.addEventListener('touchmove', drag, { passive: true });
+      document.addEventListener('touchend', dragEnd);
+
+      function dragStart(e) {
+        if (e.target.closest('.webcam-header') || e.target === webcamContainer || e.target === webcamVideo) {
+          if (e.type === "touchstart") {
+            initialX = e.touches[0].clientX - xOffset;
+            initialY = e.touches[0].clientY - yOffset;
+          } else {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+          }
+          isDragging = true;
+        }
+      }
+
+      function drag(e) {
+        if (isDragging) {
+          let clientX = e.type === "touchmove" ? e.touches[0].clientX : e.clientX;
+          let clientY = e.type === "touchmove" ? e.touches[0].clientY : e.clientY;
+          currentX = clientX - initialX;
+          currentY = clientY - initialY;
+          xOffset = currentX;
+          yOffset = currentY;
+          webcamContainer.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
+        }
+      }
+
+      function dragEnd() {
+        initialX = currentX;
+        initialY = currentY;
+        isDragging = false;
       }
 
       let faceDetector = new FaceDetector(webcamVideo, {
@@ -4435,13 +4578,16 @@
           btn.classed("selected", true);
           try {
             await faceDetector.start();
+            webcamContainer.classList.add("active");
           } catch (e) {
             btn.classed("selected", false);
+            webcamContainer.classList.remove("active");
             alert("ไม่สามารถเปิดใช้งานกล้องสำหรับ Face Tracking ได้: " + e.message);
           }
         } else {
           btn.classed("selected", false);
           faceDetector.stop();
+          webcamContainer.classList.remove("active");
           if (window.head) window.head.lookAt(window.innerWidth / 2, window.innerHeight / 2, 500);
         }
       });
