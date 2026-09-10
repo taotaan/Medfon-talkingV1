@@ -741,10 +741,34 @@
       animation: pulse-webcam-dot 1.5s infinite;
     }
 
+    .webcam-badge.listening .dot {
+      background-color: #10b981;
+      box-shadow: 0 0 6px #10b981;
+    }
+    .webcam-badge.processing .dot {
+      background-color: #f59e0b;
+      box-shadow: 0 0 6px #f59e0b;
+    }
+    .webcam-badge.speaking .dot {
+      background-color: #3b82f6;
+      box-shadow: 0 0 6px #3b82f6;
+    }
+
     @keyframes pulse-webcam-dot {
-      0% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.3; transform: scale(0.8); }
-      100% { opacity: 1; transform: scale(1); }
+      0% {
+        opacity: 1;
+        transform: scale(1);
+      }
+
+      50% {
+        opacity: 0.3;
+        transform: scale(0.8);
+      }
+
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
     }
 
     .webcam-title {
@@ -1527,6 +1551,7 @@
     }
 
     async function speakWithProvider(s, node = null, exclude = null) {
+      window.isProcessingVoice = false;
       if (cfg('voice-type') === 'eleven') {
         await elevenSpeak(s + " ", node);
         return exclude;
@@ -1823,13 +1848,22 @@
                     } catch (error) {
                       console.error("Invalid response from OpenAI");
                     }
-                    if (json && json.text) {
+                    if (json && json.text && json.text.trim()) {
                       const e = d3.select("#input");
                       let text = e.property("value");
+                      let transcribed = json.text.trim();
                       if (text) {
-                        e.property("value", text + ' ' + json.text);
+                        e.property("value", text + ' ' + transcribed);
                       } else {
-                        e.property("value", json.text);
+                        e.property("value", transcribed);
+                      }
+                      e.dispatch("input");
+
+                      if (d3.select('#facetrack').classed("selected") || d3.select('#record').classed("selected")) {
+                        window.isProcessingVoice = true;
+                        if (typeof window.submitChatMessage === "function") {
+                          await window.submitChatMessage();
+                        }
                       }
                     }
                   }
@@ -1865,10 +1899,20 @@
                         .replaceAll("  ", " ")
                         .trim();
 
-                      if (text) {
-                        e.property("value", text + ' ' + s);
-                      } else {
-                        e.property("value", s);
+                      if (s) {
+                        if (text) {
+                          e.property("value", text + ' ' + s);
+                        } else {
+                          e.property("value", s);
+                        }
+                        e.dispatch("input");
+
+                        if (d3.select('#facetrack').classed("selected") || d3.select('#record').classed("selected")) {
+                          window.isProcessingVoice = true;
+                          if (typeof window.submitChatMessage === "function") {
+                            await window.submitChatMessage();
+                          }
+                        }
                       }
                     }
                   }
@@ -4497,11 +4541,22 @@
         cameraView: 'full',
         avatarMood: 'neutral',
         lipsyncModules: ["en", "fi", "lt", "fr", "de", "th"],
+        listeningSilenceThresholdMs: 1500,
         // Stats display that can be used when testing performance
         statsNode: document.body,
         statsStyle: "position: fixed; bottom: 0px; left: 0px; cursor: pointer; opacity: 0.9; z-index: 10000;"
       });
       window.head = head;
+
+      // Helper function to update webcam status badge
+      function setWebcamStatus(statusText, statusClass = "") {
+        const badge = document.querySelector("#webcam-container .webcam-badge");
+        if (badge) {
+          badge.className = `webcam-badge ${statusClass}`;
+          badge.innerHTML = `<span class="dot"></span> ${statusText}`;
+        }
+      }
+      window.setWebcamStatus = setWebcamStatus;
 
       // Face Tracking webcam setup
       let webcamContainer = document.getElementById('webcam-container');
@@ -4512,7 +4567,7 @@
         webcamContainer.className = 'webcam-preview-container';
         webcamContainer.innerHTML = `
           <div class="webcam-header">
-            <span class="webcam-badge"><span class="dot"></span> LIVE</span>
+            <span class="webcam-badge listening"><span class="dot"></span> LIVE</span>
             <span class="webcam-title">Face Tracking</span>
           </div>
           <video id="webcam" autoplay playsinline muted></video>
@@ -4586,6 +4641,12 @@
           try {
             await faceDetector.start();
             webcamContainer.classList.add("active");
+            
+            // Automatically turn on microphone recording when opening camera
+            if (!d3.select('#record').classed("selected")) {
+              d3.select('#record').classed("selected", true);
+              recordingRecord();
+            }
           } catch (e) {
             btn.classed("selected", false);
             webcamContainer.classList.remove("active");
@@ -4596,8 +4657,48 @@
           faceDetector.stop();
           webcamContainer.classList.remove("active");
           if (window.head) window.head.lookAt(window.innerWidth / 2, window.innerHeight / 2, 500);
+
+          // Automatically turn off microphone recording when closing camera
+          if (d3.select('#record').classed("selected")) {
+            d3.select('#record').classed("selected", false);
+            if (recordingMediaRecorder) {
+              if (recordingMediaRecorder.state === 'recording') {
+                recordingIgnoreData = false;
+                recordingMediaRecorder.stop();
+              }
+              if (recordingMediaRecorder.stream) {
+                recordingMediaRecorder.stream.getTracks().forEach(track => track.stop());
+              }
+              recordingMediaRecorder = null;
+            }
+            if (window.head) window.head.stopListening();
+          }
         }
       });
+
+      // Auto re-arm recording and status update if camera (Face Tracking) is active
+      window.isProcessingVoice = false;
+      setInterval(() => {
+        const isCameraActive = d3.select('#facetrack').classed("selected");
+        if (!isCameraActive) return;
+
+        if (window.head && window.head.isSpeaking) {
+          setWebcamStatus("SPEAKING", "speaking");
+        } else if (window.isProcessingVoice) {
+          setWebcamStatus("THINKING...", "processing");
+        } else if (recordingMediaRecorder && recordingMediaRecorder.state === 'recording') {
+          setWebcamStatus("LISTENING...", "listening");
+        } else {
+          setWebcamStatus("LIVE", "listening");
+        }
+
+        if (isCameraActive && window.head && !window.head.isSpeaking && window.head.speechQueue.length === 0 && window.head.audioPlaylist.length === 0) {
+          if (!recordingMediaRecorder || recordingMediaRecorder.state !== 'recording') {
+            d3.select('#record').classed("selected", true);
+            recordingRecord();
+          }
+        }
+      }, 800);
 
       // Follow double clicks
       document.body.addEventListener('dblclick', function (e) {
@@ -4628,83 +4729,89 @@
       // Send message
       document.addEventListener('pointerdown', resumeAudioContext, { once: true });
       document.addEventListener('keydown', resumeAudioContext, { once: true });
-      d3.select("#input").on("keydown", async function (ev) {
-        if (ev.keyCode === 13 && !ev.shiftKey) {
-          ev.preventDefault();
-          resumeAudioContext();
-          const e = d3.select("#input");
-          let text = e.property("value");
-          if (head && text.length) {
+      async function submitChatMessage(textOverride = null) {
+        resumeAudioContext();
+        const e = d3.select("#input");
+        let text = textOverride !== null ? textOverride : e.property("value");
+        if (head && text && text.trim().length) {
+          text = text.trim();
 
-            if (isPersonaIdentityQuestion(text) || isPersonaGreeting(text)) {
-              console.info("Persona identity response handled locally");
-              const nodeInput = addMessage(true);
-              nodeInput.dataset.input = text;
-              addText(nodeInput, text);
-              e.property("value", "");
+          if (isPersonaIdentityQuestion(text) || isPersonaGreeting(text)) {
+            console.info("Persona identity response handled locally");
+            const nodeInput = addMessage(true);
+            nodeInput.dataset.input = text;
+            addText(nodeInput, text);
+            e.property("value", "");
 
-              const identity = isPersonaGreeting(text)
-                ? (hasPersonaGreeted()
-                  ? "ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?"
-                  : "สวัสดีค่ะ ฉันปลายลี่ ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?")
-                : "ฉันชื่อปลายลี่ค่ะ เป็นผู้ช่วยเสมือนภาษาไทย ยินดีช่วยคุณค่ะ";
-              const nodeOutput = addMessage(false);
-              nodeOutput.dataset.output = identity;
-              addText(nodeOutput, identity);
-              speakWithProvider(identity);
-              return;
-            }
-
-            if (cfg('ai-model').startsWith("gpt") || cfg('ai-model') === "pathumma") {
-              const m = openaiBuildMessage();
-              let flag = cfg('ai-model') === "pathumma" ? false : await openaiModerateMessage(m);
-
-              const nodeInput = addMessage(true);
-              nodeInput.dataset.input = text;
-              addText(nodeInput, text);
-              e.property("value", "");
-
-              if (flag) {
-                console.info("Moderation flagged.");
-                d3.select(nodeInput).classed("grayed", true);
-                d3.select(nodeInput.select).classed("selected", true);
-              } else {
-                const nodeOutput = addMessage(false);
-                openaiSendMessage(nodeOutput, m);
-              }
-            } else if (cfg('ai-model').startsWith("gemini")) {
-              const m = geminiBuildMessage();
-
-              const nodeInput = addMessage(true);
-              nodeInput.dataset.input = text;
-              addText(nodeInput, text);
-              e.property("value", "");
-
-              const nodeOutput = addMessage(false);
-              geminiSendMessage(nodeOutput, m);
-            } else if (cfg('ai-model').startsWith("llama")) {
-              const m = openaiBuildMessage();
-
-              const nodeInput = addMessage(true);
-              nodeInput.dataset.input = text;
-              addText(nodeInput, text);
-              e.property("value", "");
-
-              const nodeOutput = addMessage(false);
-              llamaSendMessage(nodeOutput, m);
-            } else if (cfg('ai-model').startsWith("grok")) {
-              const m = openaiBuildMessage();
-
-              const nodeInput = addMessage(true);
-              nodeInput.dataset.input = text;
-              addText(nodeInput, text);
-              e.property("value", "");
-
-              const nodeOutput = addMessage(false);
-              grokSendMessage(nodeOutput, m);
-            }
-
+            const identity = isPersonaGreeting(text)
+              ? (hasPersonaGreeted()
+                ? "ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?"
+                : "สวัสดีค่ะ ฉันปลายลี่ ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?")
+              : "ฉันชื่อปลายลี่ค่ะ เป็นผู้ช่วยเสมือนภาษาไทย ยินดีช่วยคุณค่ะ";
+            const nodeOutput = addMessage(false);
+            nodeOutput.dataset.output = identity;
+            addText(nodeOutput, identity);
+            speakWithProvider(identity);
+            return;
           }
+
+          if (cfg('ai-model').startsWith("gpt") || cfg('ai-model') === "pathumma") {
+            const m = openaiBuildMessage();
+            let flag = cfg('ai-model') === "pathumma" ? false : await openaiModerateMessage(m);
+
+            const nodeInput = addMessage(true);
+            nodeInput.dataset.input = text;
+            addText(nodeInput, text);
+            e.property("value", "");
+
+            if (flag) {
+              console.info("Moderation flagged.");
+              d3.select(nodeInput).classed("grayed", true);
+              d3.select(nodeInput.select).classed("selected", true);
+            } else {
+              const nodeOutput = addMessage(false);
+              openaiSendMessage(nodeOutput, m);
+            }
+          } else if (cfg('ai-model').startsWith("gemini")) {
+            const m = geminiBuildMessage();
+
+            const nodeInput = addMessage(true);
+            nodeInput.dataset.input = text;
+            addText(nodeInput, text);
+            e.property("value", "");
+
+            const nodeOutput = addMessage(false);
+            geminiSendMessage(nodeOutput, m);
+          } else if (cfg('ai-model').startsWith("llama")) {
+            const m = openaiBuildMessage();
+
+            const nodeInput = addMessage(true);
+            nodeInput.dataset.input = text;
+            addText(nodeInput, text);
+            e.property("value", "");
+
+            const nodeOutput = addMessage(false);
+            llamaSendMessage(nodeOutput, m);
+          } else if (cfg('ai-model').startsWith("grok")) {
+            const m = openaiBuildMessage();
+
+            const nodeInput = addMessage(true);
+            nodeInput.dataset.input = text;
+            addText(nodeInput, text);
+            e.property("value", "");
+
+            const nodeOutput = addMessage(false);
+            grokSendMessage(nodeOutput, m);
+          }
+
+        }
+      }
+      window.submitChatMessage = submitChatMessage;
+
+      d3.select("#input").on("keydown", async function (ev) {
+        if ((ev.keyCode === 13 || ev.key === 'Enter') && !ev.shiftKey) {
+          ev.preventDefault();
+          await submitChatMessage();
         }
       });
 

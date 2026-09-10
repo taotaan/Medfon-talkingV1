@@ -15,7 +15,7 @@
   "scripts": {
     "check:pathumma-tts": "node scripts/check-pathumma-tts.mjs",
     "check:pathumma-voices": "node scripts/check-pathumma-voices.mjs",
-    "start": "node server.mjs",
+    "start": ".venv\\Scripts\\python server.py",
     "test": "echo \"No tests configured\" && exit 1"
   },
   "repository": {
