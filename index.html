@@ -1944,10 +1944,8 @@
                 head.lookAtCamera(2000);
                 break;
               case 'stop':
-                if (recordingMediaRecorder) {
-                  // recordingMediaRecorder.requestData();
+                if (recordingMediaRecorder && recordingMediaRecorder.state === 'recording') {
                   recordingMediaRecorder.stop();
-                  recordingMediaRecorder.start();
                 }
                 break;
               case 'maxsilence':
@@ -4729,81 +4727,88 @@
       // Send message
       document.addEventListener('pointerdown', resumeAudioContext, { once: true });
       document.addEventListener('keydown', resumeAudioContext, { once: true });
+      let isSubmittingChat = false;
       async function submitChatMessage(textOverride = null) {
-        resumeAudioContext();
-        const e = d3.select("#input");
-        let text = textOverride !== null ? textOverride : e.property("value");
-        if (head && text && text.trim().length) {
-          text = text.trim();
+        if (isSubmittingChat) return;
+        isSubmittingChat = true;
+        try {
+          resumeAudioContext();
+          const e = d3.select("#input");
+          let text = textOverride !== null ? textOverride : e.property("value");
+          if (head && text && text.trim().length) {
+            text = text.trim();
 
-          if (isPersonaIdentityQuestion(text) || isPersonaGreeting(text)) {
-            console.info("Persona identity response handled locally");
-            const nodeInput = addMessage(true);
-            nodeInput.dataset.input = text;
-            addText(nodeInput, text);
-            e.property("value", "");
+            if (isPersonaIdentityQuestion(text) || isPersonaGreeting(text)) {
+              console.info("Persona identity response handled locally");
+              const nodeInput = addMessage(true);
+              nodeInput.dataset.input = text;
+              addText(nodeInput, text);
+              e.property("value", "");
 
-            const identity = isPersonaGreeting(text)
-              ? (hasPersonaGreeted()
-                ? "ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?"
-                : "สวัสดีค่ะ ฉันปลายลี่ ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?")
-              : "ฉันชื่อปลายลี่ค่ะ เป็นผู้ช่วยเสมือนภาษาไทย ยินดีช่วยคุณค่ะ";
-            const nodeOutput = addMessage(false);
-            nodeOutput.dataset.output = identity;
-            addText(nodeOutput, identity);
-            speakWithProvider(identity);
-            return;
-          }
-
-          if (cfg('ai-model').startsWith("gpt") || cfg('ai-model') === "pathumma") {
-            const m = openaiBuildMessage();
-            let flag = cfg('ai-model') === "pathumma" ? false : await openaiModerateMessage(m);
-
-            const nodeInput = addMessage(true);
-            nodeInput.dataset.input = text;
-            addText(nodeInput, text);
-            e.property("value", "");
-
-            if (flag) {
-              console.info("Moderation flagged.");
-              d3.select(nodeInput).classed("grayed", true);
-              d3.select(nodeInput.select).classed("selected", true);
-            } else {
+              const identity = isPersonaGreeting(text)
+                ? (hasPersonaGreeted()
+                  ? "ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?"
+                  : "สวัสดีค่ะ ฉันปลายลี่ ยินดีช่วยคุณค่ะ วันนี้มีอะไรให้ช่วยไหมคะ?")
+                : "ฉันชื่อปลายลี่ค่ะ เป็นผู้ช่วยเสมือนภาษาไทย ยินดีช่วยคุณค่ะ";
               const nodeOutput = addMessage(false);
-              openaiSendMessage(nodeOutput, m);
+              nodeOutput.dataset.output = identity;
+              addText(nodeOutput, identity);
+              speakWithProvider(identity);
+              return;
             }
-          } else if (cfg('ai-model').startsWith("gemini")) {
-            const m = geminiBuildMessage();
 
-            const nodeInput = addMessage(true);
-            nodeInput.dataset.input = text;
-            addText(nodeInput, text);
-            e.property("value", "");
+            if (cfg('ai-model').startsWith("gpt") || cfg('ai-model') === "pathumma") {
+              const m = openaiBuildMessage();
+              let flag = cfg('ai-model') === "pathumma" ? false : await openaiModerateMessage(m);
 
-            const nodeOutput = addMessage(false);
-            geminiSendMessage(nodeOutput, m);
-          } else if (cfg('ai-model').startsWith("llama")) {
-            const m = openaiBuildMessage();
+              const nodeInput = addMessage(true);
+              nodeInput.dataset.input = text;
+              addText(nodeInput, text);
+              e.property("value", "");
 
-            const nodeInput = addMessage(true);
-            nodeInput.dataset.input = text;
-            addText(nodeInput, text);
-            e.property("value", "");
+              if (flag) {
+                console.info("Moderation flagged.");
+                d3.select(nodeInput).classed("grayed", true);
+                d3.select(nodeInput.select).classed("selected", true);
+              } else {
+                const nodeOutput = addMessage(false);
+                openaiSendMessage(nodeOutput, m);
+              }
+            } else if (cfg('ai-model').startsWith("gemini")) {
+              const m = geminiBuildMessage();
 
-            const nodeOutput = addMessage(false);
-            llamaSendMessage(nodeOutput, m);
-          } else if (cfg('ai-model').startsWith("grok")) {
-            const m = openaiBuildMessage();
+              const nodeInput = addMessage(true);
+              nodeInput.dataset.input = text;
+              addText(nodeInput, text);
+              e.property("value", "");
 
-            const nodeInput = addMessage(true);
-            nodeInput.dataset.input = text;
-            addText(nodeInput, text);
-            e.property("value", "");
+              const nodeOutput = addMessage(false);
+              geminiSendMessage(nodeOutput, m);
+            } else if (cfg('ai-model').startsWith("llama")) {
+              const m = openaiBuildMessage();
 
-            const nodeOutput = addMessage(false);
-            grokSendMessage(nodeOutput, m);
+              const nodeInput = addMessage(true);
+              nodeInput.dataset.input = text;
+              addText(nodeInput, text);
+              e.property("value", "");
+
+              const nodeOutput = addMessage(false);
+              llamaSendMessage(nodeOutput, m);
+            } else if (cfg('ai-model').startsWith("grok")) {
+              const m = openaiBuildMessage();
+
+              const nodeInput = addMessage(true);
+              nodeInput.dataset.input = text;
+              addText(nodeInput, text);
+              e.property("value", "");
+
+              const nodeOutput = addMessage(false);
+              grokSendMessage(nodeOutput, m);
+            }
+
           }
-
+        } finally {
+          isSubmittingChat = false;
         }
       }
       window.submitChatMessage = submitChatMessage;
