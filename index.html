@@ -664,37 +664,39 @@
     }
 
 
-    /* Webcam preview PIP overlay */
+    /* Webcam preview PIP overlay - Vertical Standing Mode */
     #webcam-container {
       position: fixed;
-      bottom: 24px;
-      left: 24px;
-      width: 180px;
-      height: 135px;
-      background: rgba(15, 23, 42, 0.85);
+      bottom: 16px;
+      right: 16px;
+      width: 140px;
+      height: 185px;
+      background: rgba(15, 23, 42, 0.9);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       border: 1.5px solid var(--colorBorderPassive, rgba(136, 204, 255, 0.6));
-      border-radius: 12px;
+      border-radius: 14px;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 12px rgba(136, 204, 255, 0.2);
       overflow: hidden;
       z-index: 9999;
       display: none;
       opacity: 0;
-      transform: scale(0.9);
-      transition: opacity 0.3s ease, transform 0.3s ease;
-      cursor: grab;
+      transition: opacity 0.3s ease;
       user-select: none;
     }
 
     #webcam-container.active {
       display: block;
       opacity: 1;
-      transform: scale(1);
     }
 
-    #webcam-container:active {
-      cursor: grabbing;
+    /* Auto shrink chat bottom panel when webcam is active */
+    #bottom {
+      transition: right 0.3s ease, margin-right 0.3s ease;
+    }
+
+    body.webcam-active #bottom {
+      margin-right: 155px !important;
     }
 
     #webcam-container #webcam {
@@ -4572,62 +4574,13 @@
         `;
         document.body.appendChild(webcamContainer);
         webcamVideo = webcamContainer.querySelector('#webcam');
-      }
-
-      // Drag functionality for webcam preview overlay
-      let isDragging = false;
-      let currentX = 0, currentY = 0, initialX = 0, initialY = 0;
-      let xOffset = 0, yOffset = 0;
-
-      webcamContainer.addEventListener('mousedown', dragStart);
-      document.addEventListener('mousemove', drag);
-      document.addEventListener('mouseup', dragEnd);
-
-      webcamContainer.addEventListener('touchstart', dragStart, { passive: true });
-      document.addEventListener('touchmove', drag, { passive: true });
-      document.addEventListener('touchend', dragEnd);
-
-      function dragStart(e) {
-        if (e.target.closest('.webcam-header') || e.target === webcamContainer || e.target === webcamVideo) {
-          if (e.type === "touchstart") {
-            initialX = e.touches[0].clientX - xOffset;
-            initialY = e.touches[0].clientY - yOffset;
-          } else {
-            initialX = e.clientX - xOffset;
-            initialY = e.clientY - yOffset;
-          }
-          isDragging = true;
-        }
-      }
-
-      function drag(e) {
-        if (isDragging) {
-          let clientX = e.type === "touchmove" ? e.touches[0].clientX : e.clientX;
-          let clientY = e.type === "touchmove" ? e.touches[0].clientY : e.clientY;
-          currentX = clientX - initialX;
-          currentY = clientY - initialY;
-          xOffset = currentX;
-          yOffset = currentY;
-          webcamContainer.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
-        }
-      }
-
-      function dragEnd() {
-        initialX = currentX;
-        initialY = currentY;
-        isDragging = false;
+        webcamContainer.style.transform = '';
       }
 
       let faceDetector = new FaceDetector(webcamVideo, {
         smoothing: 0.15,
         onDetect: (res) => {
-          if (res.found && window.head) {
-            window.head.lookAt(
-              window.innerWidth * (0.5 + res.x * 0.4),
-              window.innerHeight * (0.5 - res.y * 0.4),
-              100
-            );
-          }
+          // Head stays static / still as requested ("อยู่เฉยๆ ไม่ต้องขยับ")
         }
       });
 
@@ -4638,7 +4591,10 @@
           btn.classed("selected", true);
           try {
             await faceDetector.start();
+            if (webcamContainer) webcamContainer.style.transform = '';
             webcamContainer.classList.add("active");
+            document.body.classList.add("webcam-active");
+            if (window.head) window.head.lookAtCamera(500);
             
             // Automatically turn on microphone recording when opening camera
             if (!d3.select('#record').classed("selected")) {
@@ -4648,12 +4604,14 @@
           } catch (e) {
             btn.classed("selected", false);
             webcamContainer.classList.remove("active");
+            document.body.classList.remove("webcam-active");
             alert("ไม่สามารถเปิดใช้งานกล้องสำหรับ Face Tracking ได้: " + e.message);
           }
         } else {
           btn.classed("selected", false);
           faceDetector.stop();
           webcamContainer.classList.remove("active");
+          document.body.classList.remove("webcam-active");
           if (window.head) window.head.lookAt(window.innerWidth / 2, window.innerHeight / 2, 500);
 
           // Automatically turn off microphone recording when closing camera
